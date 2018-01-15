@@ -60,6 +60,10 @@ import org.tmatesoft.sqljet.core.table.ISqlJetCursor;
 import org.tmatesoft.sqljet.core.table.ISqlJetTable;
 import org.tmatesoft.sqljet.core.table.SqlJetDb;
 
+import com.redhat.maven.index.checker.output.CsvOutputWriter;
+import com.redhat.maven.index.checker.output.JsonOutputWriter;
+import com.redhat.maven.index.checker.output.OutputWriter;
+
 public class MavenIndexChecker {
     public static void main(String[] args)
             throws Exception {
@@ -94,9 +98,10 @@ public class MavenIndexChecker {
 
         Option countOption = new Option("c", "count", false,
                 "Report number of entries and quit.");
-        latestOption.setRequired(false);
         options.addOption(countOption);
 
+        Option formatOption = new Option("f", "format", true, "Output formar, json (default) or csv.");
+        options.addOption(formatOption);
 
         CommandLineParser parser = new BasicParser();
         HelpFormatter formatter = new HelpFormatter();
@@ -148,8 +153,16 @@ public class MavenIndexChecker {
             maxJarNumberValue = Integer.parseInt(cmd.getOptionValue("mj"));
         }
 
-        final MavenIndexChecker mavenIndexChecker = new MavenIndexChecker(newOnly, latestOnly,
-                countOnly, mavenIndexRange, maxJarNumberValue);
+        OutputWriter writer = new JsonOutputWriter();
+        if (cmd.hasOption("f")) {
+            String fmt = cmd.getOptionValue("f").toLowerCase(Locale.getDefault());
+            if ("csv".equals(fmt)) {
+                writer = new CsvOutputWriter();
+            }
+        }
+
+        final MavenIndexChecker mavenIndexChecker = new MavenIndexChecker(newOnly, latestOnly, countOnly,
+                mavenIndexRange, maxJarNumberValue, writer);
         mavenIndexChecker.perform();
     }
 
@@ -198,6 +211,8 @@ public class MavenIndexChecker {
 
     private Range ranges = null;
 
+    private OutputWriter writer;
+
     private static class Range {
         int start;
         int end;
@@ -208,8 +223,8 @@ public class MavenIndexChecker {
         }
     }
 
-    private MavenIndexChecker(boolean newOnly, boolean latestOnly, boolean countOnly, Range ranges, int maxJarNumber)
-            throws PlexusContainerException, ComponentLookupException {
+    private MavenIndexChecker(boolean newOnly, boolean latestOnly, boolean countOnly, Range ranges, int maxJarNumber,
+            OutputWriter writer) throws PlexusContainerException, ComponentLookupException {
         final DefaultContainerConfiguration config = new DefaultContainerConfiguration();
         config.setClassPathScanning(PlexusConstants.SCANNING_INDEX);
         this.plexusContainer = new DefaultPlexusContainer(config);
@@ -227,6 +242,7 @@ public class MavenIndexChecker {
             this.ranges = ranges;
 
         this.maxJarNumber = maxJarNumber;
+        this.writer = writer;
     }
 
     private boolean shouldInsert(SqlJetDb db, ISqlJetTable table, ArtifactInfo ai) throws SqlJetException {
@@ -236,7 +252,7 @@ public class MavenIndexChecker {
         db.beginTransaction(SqlJetTransactionMode.READ_ONLY);
         try {
             ISqlJetCursor cursor = null;
-            cursor = table.lookup("package_version", ai.getArtifactId(), ai.getGroupId(), ai.getVersion());
+            cursor = table.lookup("package_version", ai.getGroupId(), ai.getArtifactId(), ai.getVersion());
             if (cursor.getRowCount() > 0) {
                 shouldInsert = false;
             }
@@ -250,7 +266,7 @@ public class MavenIndexChecker {
             db.beginTransaction(SqlJetTransactionMode.READ_ONLY);
             try {
                 ISqlJetCursor cursor = null;
-                cursor = table.lookup("package", ai.getArtifactId(), ai.getGroupId());
+                cursor = table.lookup("package", ai.getGroupId(), ai.getArtifactId());
                 if (cursor.getRowCount() > 0) {
                     shouldInsert = false;
                 }
@@ -275,9 +291,8 @@ public class MavenIndexChecker {
         indexers.add(plexusContainer.lookup(IndexCreator.class, "maven-plugin"));
 
         // Create context for central repository index
-        IndexingContext centralContext =
-                indexer.createIndexingContext("central-context", "central", centralLocalCache, centralIndexDir,
-                        MAVEN_URL, null, true, true, indexers);
+        IndexingContext centralContext = indexer.createIndexingContext("central-context", "central", centralLocalCache,
+                centralIndexDir, MAVEN_URL, null, true, true, indexers);
 
         // Update the index (incremental update will happen if this is not 1st run and files are not deleted)
         // This whole block below should not be executed on every app start, but rather controlled by some configuration
@@ -387,7 +402,7 @@ public class MavenIndexChecker {
                             packagesInserted++;
                             db.beginTransaction(SqlJetTransactionMode.WRITE);
                             try {
-                                table.insert(ai.getArtifactId(), ai.getGroupId(), ai.getVersion());
+                                table.insert(ai.getGroupId(), ai.getArtifactId(), ai.getVersion());
                             } finally {
                                 db.commit();
                             }
@@ -401,31 +416,13 @@ public class MavenIndexChecker {
             }
 
             // print the resulting JSON manually to avoid having to load all objects in memory
-            System.out.print("[");
             db.beginTransaction(SqlJetTransactionMode.READ_ONLY);
             try {
                 ISqlJetCursor cursor = table.open();
-                boolean notFirst = false;
-                while (!cursor.eof()) {
-                    if (notFirst) {
-                        System.out.print(",");
-                    }
-                    notFirst = true;
-
-                    try {
-                        OutputInfo oi = new OutputInfo(cursor.getString("groupId"),
-                                                       cursor.getString("artifactId"),
-                                                       cursor.getString("version"));
-                        System.out.print(oi.toJSON());
-                    } catch (SqlJetException ex) {
-                        logger.error("Failed to fetch data from database", ex);
-                    }
-                    cursor.next();
-                }
+                writer.writeAll(cursor);
             } finally {
                 db.commit();
             }
-            System.out.print("]");
         } finally {
             centralContext.releaseIndexSearcher(searcher);
         }
