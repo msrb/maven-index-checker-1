@@ -1,3 +1,8 @@
 ./maven-index-checker.iml
 ./.idea
 ./target
+/target/
+.classpath
+.project
+.settings/
+
