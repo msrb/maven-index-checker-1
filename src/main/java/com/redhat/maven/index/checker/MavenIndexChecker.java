@@ -97,10 +97,11 @@ public class MavenIndexChecker {
         options.addOption(latestOption);
 
         Option countOption = new Option("c", "count", false,
-                "Report number of entries and quit.");
+                "report number of entries and quit.");
         options.addOption(countOption);
 
-        Option formatOption = new Option("f", "format", true, "Output formar, json (default) or csv.");
+        Option formatOption = new Option("f", "format", true,
+                "output formar, json (default) or csv.");
         options.addOption(formatOption);
 
         CommandLineParser parser = new BasicParser();
